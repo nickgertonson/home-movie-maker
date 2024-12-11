@@ -35,15 +35,23 @@ find "$source_dir" -type f -iname "*.mp4" -print0 | while IFS= read -r -d '' fil
 done
 
 # Preprocess MP4 files
-count=0
-find "$backup_subdir" -type f -iname "*.mp4" -print0 | while IFS= read -r -d '' file; do
-  count=$((count+1))
-  safe_filename="${count}_$(basename "$file")"
+# find "$backup_subdir" -type f -iname "*.mp4" -print0 | while IFS= read -r -d '' file; do
+find "$backup_subdir" -type f -iname "*.mp4" -exec stat -f "%B|%N" {} + | sort -t'|' -k1,1n | while IFS='|' read -r creation_timestamp file; do
+  safe_filename="pre_$(basename "$file")"
   output="${tmp_dir}/${safe_filename}"
+
+  creation_timestamp=$(stat -f "%B" "$file")
+
+  # Format the date as "Month, DD, YYYY 8:50pm"
+  formatted_date=$(date -r "$creation_timestamp" "+%B %d, %Y at %-I\:%M%P")
+
+  echo "Made On $formatted_date"
+
+  escaped_date=$(echo "$formatted_date" | sed "s/'/\\\'/g")
 
   echo "Preprocessing $file -> $output"
   < /dev/null ffmpeg -y -i "$file" -vf "drawtext=fontfile=/System/Library/Fonts/Supplemental/Arial.ttf: \
-  text='$(basename "$file")': x=10: y=10: fontcolor=white: fontsize=24: box=1: boxcolor=black@0.5" \
+  text='$escaped_date': x=100: y=100: fontcolor=white: fontsize=24: box=1: boxcolor=black@0" \
   -c:v libx264 -crf 23 -preset fast -c:a aac "$output"
 
   if [ $? -eq 0 ]; then
@@ -66,8 +74,18 @@ cd "$tmp_dir" || exit
 echo -n > file_list.txt  # Create or truncate the file
 
 
-# Find and process MP4 files
-find "$tmp_dir" -type f -iname "*.mp4" | while IFS= read -r file; do
+# # Find and process MP4 files
+# find "$tmp_dir" -type f -iname "*.mp4" | while IFS= read -r file; do
+#   if [ -f "$file" ]; then
+#     echo "file '$(realpath "$file")'" >> file_list.txt
+#     echo "Added to file_list.txt: $file"
+#   else
+#     echo "Skipping: $file (not a regular file)"
+#   fi
+# done
+
+# Find files, retrieve creation times, and sort them
+find "$tmp_dir" -type f -iname "*.mp4" -exec stat -f "%B|%N" {} + | sort -t'|' -k1,1n | cut -d'|' -f2- | while IFS= read -r file; do
   if [ -f "$file" ]; then
     echo "file '$(realpath "$file")'" >> file_list.txt
     echo "Added to file_list.txt: $file"
@@ -75,6 +93,8 @@ find "$tmp_dir" -type f -iname "*.mp4" | while IFS= read -r file; do
     echo "Skipping: $file (not a regular file)"
   fi
 done
+
+
 
 # Validate file_list.txt
 if [ -s file_list.txt ]; then
@@ -98,6 +118,6 @@ else
   echo "No files to concatenate. file_list.txt is empty."
 fi
 
-# # Cleanup
-# rm -rf "$tmp_dir"
-# echo "Temporary directory cleaned up: $tmp_dir"
+# Cleanup
+rm -rf "$tmp_dir"
+echo "Temporary directory cleaned up: $tmp_dir"
