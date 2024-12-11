@@ -53,24 +53,36 @@ find "$backup_subdir" -type f -iname "*.mp4" -print0 | while IFS= read -r -d '' 
   fi
 done
 
-# Validate TMP_DIR contents
-echo "TMP_DIR contents:"
+# Debug TMP_DIR and contents
+echo "TMP_DIR is: $tmp_dir"
+echo "Contents of TMP_DIR:"
 ls -l "$tmp_dir"
 
-# Generate file_list.txt for FFmpeg
-cd "$tmp_dir" || exit
-> file_list.txt
+# Disable Zsh's nomatch behavior
+setopt +o nomatch
 
-# Iterate over files to create file_list.txt
-for file in *.mp4; do
+# Generate file_list.txt
+cd "$tmp_dir" || exit
+echo -n > file_list.txt  # Create or truncate the file
+
+
+# Find and process MP4 files
+find "$tmp_dir" -type f -iname "*.mp4" | while IFS= read -r file; do
   if [ -f "$file" ]; then
     echo "file '$(realpath "$file")'" >> file_list.txt
+    echo "Added to file_list.txt: $file"
+  else
+    echo "Skipping: $file (not a regular file)"
   fi
 done
 
 # Validate file_list.txt
-echo "Generated file_list.txt:"
-cat file_list.txt
+if [ -s file_list.txt ]; then
+  echo "file_list.txt created successfully:"
+  cat file_list.txt
+else
+  echo "No MP4 files found in $tmp_dir. file_list.txt is empty."
+fi
 
 # Concatenate preprocessed clips
 output_file="${compilation_dir}/${project_name}.mp4"
@@ -86,6 +98,6 @@ else
   echo "No files to concatenate. file_list.txt is empty."
 fi
 
-# Cleanup
-rm -rf "$tmp_dir"
-echo "Temporary directory cleaned up: $tmp_dir"
+# # Cleanup
+# rm -rf "$tmp_dir"
+# echo "Temporary directory cleaned up: $tmp_dir"
