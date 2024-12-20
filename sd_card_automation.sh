@@ -1,5 +1,7 @@
 #!/bin/zsh
 
+# 12.19.24
+
 # Configuration
 logfile="video_compilation.log"
 echo "Started at $(date)." > "$logfile"
