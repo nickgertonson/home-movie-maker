@@ -121,5 +121,5 @@ else
 fi
 
 # Cleanup
-rm -rf "$tmp_dir"
-echo "Temporary directory cleaned up: $tmp_dir"
+# rm -rf "$tmp_dir"
+# echo "Temporary directory cleaned up: $tmp_dir"
