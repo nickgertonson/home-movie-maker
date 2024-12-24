@@ -7,7 +7,8 @@ logfile="video_compilation.log"
 echo "Started at $(date)." > "$logfile"
 
 # Define directories
-source_dir="/Volumes/HC-VX981/DCIM"
+# source_dir="/Volumes/HC-VX981/DCIM"
+source_dir="/Users/nickgertonson/Desktop/FakeSD"
 backup_dir="/Users/nickgertonson/Library/Mobile Documents/com~apple~CloudDocs/Video Backups"
 compilation_dir="${backup_dir}/Compilations"
 processed_files="${backup_dir}/.processed_files.txt"
