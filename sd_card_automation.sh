@@ -38,101 +38,70 @@ find "$source_dir" -type f -iname "*.mp4" -print0 | while IFS= read -r -d '' fil
   fi
 done
 
-# Preprocess MP4 files
-# find "$backup_subdir" -type f -iname "*.mp4" -print0 | while IFS= read -r -d '' file; do
-find "$backup_subdir" -type f -iname "*.mp4" -exec stat -f "%B|%N" {} + | sort -t'|' -k1,1n | while IFS='|' read -r creation_timestamp file; do
-  safe_filename="pre_$(basename "$file")"
-  output="${tmp_dir}/${safe_filename}"
+# Define preprocessing function
+preprocess_video() {
+    local file="$1"
+    local safe_filename="pre_$(basename "$file")"
+    local output="${tmp_dir}/${safe_filename}"
+    
+    creation_timestamp=$(stat -f "%B" "$file")
+    formatted_date=$(date -r "$creation_timestamp" "+%B %d, %Y at %-I\:%M%P")
+    escaped_date=$(echo "$formatted_date" | sed "s/'/\\\'/g")
+    
+    echo "Preprocessing $file -> $output"
+    if < /dev/null ffmpeg -y -i "$file" -vf "drawtext=fontfile=/System/Library/Fonts/Supplemental/Arial.ttf: \
+    text='$escaped_date': enable='lte(t,5)': x=100: y=100: fontcolor=white: fontsize=24: box=1: boxcolor=black@0" \
+    -c:v libx264 -crf 23 -preset fast -c:a aac "$output"; then
+        echo "Successfully processed: $output"
+        return 0
+    else
+        echo "Failed to process: $file"
+        return 1
+    fi
+}
 
-  creation_timestamp=$(stat -f "%B" "$file")
+# Get optimal number of parallel jobs
+num_cores=$(sysctl -n hw.ncpu)
+max_jobs=$((num_cores - 1))
 
-  # Format the date as "Month, DD, YYYY 8:50pm"
-  formatted_date=$(date -r "$creation_timestamp" "+%B %d, %Y at %-I\:%M%P")
-
-  echo "Made On $formatted_date"
-
-  escaped_date=$(echo "$formatted_date" | sed "s/'/\\\'/g")
-
-echo "Preprocessing $file -> $output"
-  < /dev/null ffmpeg -y -i "$file" -vf "drawtext=fontfile=/System/Library/Fonts/Supplemental/Arial.ttf: \
-  text='$escaped_date': enable='lte(t,5)': x=100: y=100: fontcolor=white: fontsize=24: box=1: boxcolor=black@0" \
-  -c:v libx264 -crf 23 -preset fast -c:a aac "$output"
-
-  if [ $? -eq 0 ]; then
-    echo "Successfully preprocessed: $output"
-  else
-    echo "Error preprocessing: $file"
-  fi
+# Process files in chronological order and create concat list
+echo -n > "${tmp_dir}/file_list.txt"
+find "$backup_subdir" -type f -iname "*.mp4" -exec stat -f "%B|%N" {} + | \
+    sort -t'|' -k1,1n | cut -d'|' -f2- | while IFS= read -r file; do
+    preprocess_video "$file"
+    processed_file="${tmp_dir}/pre_$(basename "$file")"
+    if [ -f "$processed_file" ]; then
+        echo "file '$(realpath "$processed_file")'" >> "${tmp_dir}/file_list.txt"
+        echo "Processed and added to list: $file"
+    fi
 done
-
-# Debug TMP_DIR and contents
-echo "TMP_DIR is: $tmp_dir"
-echo "Contents of TMP_DIR:"
-ls -l "$tmp_dir"
-
-# Disable Zsh's nomatch behavior
-setopt +o nomatch
-
-# Generate file_list.txt
-cd "$tmp_dir" || exit
-echo -n > file_list.txt  # Create or truncate the file
-
-
-# # Find and process MP4 files
-# find "$tmp_dir" -type f -iname "*.mp4" | while IFS= read -r file; do
-#   if [ -f "$file" ]; then
-#     echo "file '$(realpath "$file")'" >> file_list.txt
-#     echo "Added to file_list.txt: $file"
-#   else
-#     echo "Skipping: $file (not a regular file)"
-#   fi
-# done
-
-# Find files, retrieve creation times, and sort them
-find "$tmp_dir" -type f -iname "*.mp4" -exec stat -f "%B|%N" {} + | sort -t'|' -k1,1n | cut -d'|' -f2- | while IFS= read -r file; do
-  if [ -f "$file" ]; then
-    echo "file '$(realpath "$file")'" >> file_list.txt
-    echo "Added to file_list.txt: $file"
-  else
-    echo "Skipping: $file (not a regular file)"
-  fi
-done
-
-
 
 # Validate file_list.txt
-if [ -s file_list.txt ]; then
-  echo "file_list.txt created successfully:"
-  cat file_list.txt
+if [ -s "${tmp_dir}/file_list.txt" ]; then
+    echo "file_list.txt created successfully:"
+    cat "${tmp_dir}/file_list.txt"
 else
-  echo "No MP4 files found in $tmp_dir. file_list.txt is empty."
+    echo "No MP4 files found in $tmp_dir. file_list.txt is empty."
 fi
 
 # Concatenate preprocessed clips
 output_file="${compilation_dir}/${project_name}.mp4"
 echo "Starting video concatenation..."
-if [ -s file_list.txt ]; then
-  ffmpeg -f concat -safe 0 -i file_list.txt -c:v libx264 -crf 23 -preset fast -c:a aac "$output_file"
-  if [ -f "$output_file" ]; then
-    echo "Video processing completed successfully! Output: $output_file"
-  else
-    echo "Video processing failed."
-  fi
+if [ -s "${tmp_dir}/file_list.txt" ]; then
+    ffmpeg -f concat -safe 0 -i "${tmp_dir}/file_list.txt" -c:v libx264 -crf 23 -preset fast -c:a aac "$output_file"
+    if [ -f "$output_file" ]; then
+        echo "Video processing completed successfully! Output: $output_file"
+    else
+        echo "Video processing failed."
+    fi
 else
-  echo "No files to concatenate. file_list.txt is empty."
+    echo "No files to concatenate. file_list.txt is empty."
 fi
 
-# Cleanup
-# rm -rf "$tmp_dir"
-# echo "Temporary directory cleaned up: $tmp_dir"
-
-
-# Calculate and display duration at the end
+# Calculate and display duration
 end_time=$(date +%s)
 duration=$((end_time - start_time))
 hours=$((duration / 3600))
 minutes=$(( (duration % 3600) / 60 ))
 seconds=$((duration % 60))
-
 echo "Total processing time: ${hours}h ${minutes}m ${seconds}s"
-echo "Total processing time: ${hours}h ${minutes}m ${seconds}s" >> "$logfile"
