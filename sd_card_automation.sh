@@ -1,6 +1,7 @@
 #!/bin/zsh
 
-# 12.19.24
+# Store start time
+start_time=$(date +%s)
 
 # Configuration
 logfile="video_compilation.log"
@@ -124,3 +125,14 @@ fi
 # Cleanup
 # rm -rf "$tmp_dir"
 # echo "Temporary directory cleaned up: $tmp_dir"
+
+
+# Calculate and display duration at the end
+end_time=$(date +%s)
+duration=$((end_time - start_time))
+hours=$((duration / 3600))
+minutes=$(( (duration % 3600) / 60 ))
+seconds=$((duration % 60))
+
+echo "Total processing time: ${hours}h ${minutes}m ${seconds}s"
+echo "Total processing time: ${hours}h ${minutes}m ${seconds}s" >> "$logfile"
