@@ -8,7 +8,6 @@ logfile="video_compilation.log"
 echo "Started at $(date)." > "$logfile"
 
 # Define directories
-# source_dir="/Volumes/HC-VX981/DCIM"
 source_dir="/Users/nickgertonson/Desktop/FakeSD"
 backup_dir="/Users/nickgertonson/Library/Mobile Documents/com~apple~CloudDocs/Video Backups"
 compilation_dir="${backup_dir}/Compilations"
@@ -38,46 +37,48 @@ find "$source_dir" -type f -iname "*.mp4" -print0 | while IFS= read -r -d '' fil
   fi
 done
 
+# Define the maximum number of jobs to run in parallel
+max_jobs=2  # Adjust this to match your system's resources
+
 # Preprocess MP4 files
-# find "$backup_subdir" -type f -iname "*.mp4" -print0 | while IFS= read -r -d '' file; do
-find "$backup_subdir" -type f -iname "*.mp4" -exec stat -f "%B|%N" {} + | sort -t'|' -k1,1n | while IFS='|' read -r creation_timestamp file; do
-  safe_filename="pre_$(basename "$file")"
-  output="${tmp_dir}/${safe_filename}"
+find "$backup_subdir" -type f -iname "*.mp4" -print0 | while IFS= read -r -d '' file; do
+  (
+    # Preprocessing logic
+    safe_filename="pre_$(basename "$file")"
+    output="${tmp_dir}/${safe_filename}"
 
-  creation_timestamp=$(stat -f "%B" "$file")
+    # Static text for testing
+    static_text="sample text"
 
-  # Format the date as "Month, DD, YYYY 8:50pm"
-  formatted_date=$(date -r "$creation_timestamp" "+%B %d, %Y at %-I\:%M%P")
+    echo "Preprocessing $file -> $output"
+    ffmpeg -y -i "$file" -vf "drawtext=fontfile=/System/Library/Fonts/Supplemental/Arial.ttf: \
+    text='$static_text': enable='lte(t,5)': x=100: y=100: fontcolor=white: fontsize=24: box=1: boxcolor=black@0" \
+    -c:v libx264 -crf 23 -preset fast -c:a aac "$output"
 
-  echo "Made On $formatted_date"
+    if [ $? -eq 0 ]; then
+      echo "Successfully preprocessed: $output"
+    else
+      echo "Error preprocessing: $file" >> "$logfile"
+    fi
+  ) &
 
-  escaped_date=$(echo "$formatted_date" | sed "s/'/\\\'/g")
-
-echo "Preprocessing $file -> $output"
-  < /dev/null ffmpeg -y -i "$file" -vf "drawtext=fontfile=/System/Library/Fonts/Supplemental/Arial.ttf: \
-  text='$escaped_date': enable='lte(t,5)': x=100: y=100: fontcolor=white: fontsize=24: box=1: boxcolor=black@0" \
-  -c:v libx264 -crf 23 -preset fast -c:a aac "$output"
-
-  if [ $? -eq 0 ]; then
-    echo "Successfully preprocessed: $output"
-  else
-    echo "Error preprocessing: $file"
-  fi
+  # Manage parallel jobs
+  while [ $(jobs -p | wc -l) -ge $max_jobs ]; do
+    sleep 1
+  done
 done
+
+wait  # Wait for all background jobs to complete
 
 # Debug TMP_DIR and contents
 echo "TMP_DIR is: $tmp_dir"
 echo "Contents of TMP_DIR:"
 ls -l "$tmp_dir"
 
-# Disable Zsh's nomatch behavior
-setopt +o nomatch
-
 # Generate file_list.txt
 cd "$tmp_dir" || exit
 echo -n > file_list.txt  # Create or truncate the file
 
-# Find files, retrieve creation times, and sort them
 find "$tmp_dir" -type f -iname "*.mp4" -exec stat -f "%B|%N" {} + | sort -t'|' -k1,1n | cut -d'|' -f2- | while IFS= read -r file; do
   if [ -f "$file" ]; then
     echo "file '$(realpath "$file")'" >> file_list.txt
@@ -92,7 +93,8 @@ if [ -s file_list.txt ]; then
   echo "file_list.txt created successfully:"
   cat file_list.txt
 else
-  echo "No MP4 files found in $tmp_dir. file_list.txt is empty."
+  echo "No MP4 files found in $tmp_dir. file_list.txt is empty." >> "$logfile"
+  exit 1
 fi
 
 # Concatenate preprocessed clips
@@ -103,15 +105,16 @@ if [ -s file_list.txt ]; then
   if [ -f "$output_file" ]; then
     echo "Video processing completed successfully! Output: $output_file"
   else
-    echo "Video processing failed."
+    echo "Video processing failed." >> "$logfile"
   fi
 else
-  echo "No files to concatenate. file_list.txt is empty."
+  echo "No files to concatenate. file_list.txt is empty." >> "$logfile"
+  exit 1
 fi
 
 # Cleanup
-# rm -rf "$tmp_dir"
-# echo "Temporary directory cleaned up: $tmp_dir"
+rm -rf "$tmp_dir"
+echo "Temporary directory cleaned up: $tmp_dir"
 
 # Calculate and display duration at the end
 end_time=$(date +%s)
