@@ -53,9 +53,9 @@ find "$backup_subdir" -type f -iname "*.mp4" -exec stat -f "%B|%N" {} + | sort -
 
   escaped_date=$(echo "$formatted_date" | sed "s/'/\\\'/g")
 
-  echo "Preprocessing $file -> $output"
+echo "Preprocessing $file -> $output"
   < /dev/null ffmpeg -y -i "$file" -vf "drawtext=fontfile=/System/Library/Fonts/Supplemental/Arial.ttf: \
-  text='$escaped_date': x=100: y=100: fontcolor=white: fontsize=24: box=1: boxcolor=black@0" \
+  text='$escaped_date': enable='lte(t,5)': x=100: y=100: fontcolor=white: fontsize=24: box=1: boxcolor=black@0" \
   -c:v libx264 -crf 23 -preset fast -c:a aac "$output"
 
   if [ $? -eq 0 ]; then
