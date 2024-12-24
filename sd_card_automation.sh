@@ -77,17 +77,6 @@ setopt +o nomatch
 cd "$tmp_dir" || exit
 echo -n > file_list.txt  # Create or truncate the file
 
-
-# # Find and process MP4 files
-# find "$tmp_dir" -type f -iname "*.mp4" | while IFS= read -r file; do
-#   if [ -f "$file" ]; then
-#     echo "file '$(realpath "$file")'" >> file_list.txt
-#     echo "Added to file_list.txt: $file"
-#   else
-#     echo "Skipping: $file (not a regular file)"
-#   fi
-# done
-
 # Find files, retrieve creation times, and sort them
 find "$tmp_dir" -type f -iname "*.mp4" -exec stat -f "%B|%N" {} + | sort -t'|' -k1,1n | cut -d'|' -f2- | while IFS= read -r file; do
   if [ -f "$file" ]; then
@@ -97,8 +86,6 @@ find "$tmp_dir" -type f -iname "*.mp4" -exec stat -f "%B|%N" {} + | sort -t'|' -
     echo "Skipping: $file (not a regular file)"
   fi
 done
-
-
 
 # Validate file_list.txt
 if [ -s file_list.txt ]; then
@@ -125,7 +112,6 @@ fi
 # Cleanup
 # rm -rf "$tmp_dir"
 # echo "Temporary directory cleaned up: $tmp_dir"
-
 
 # Calculate and display duration at the end
 end_time=$(date +%s)
