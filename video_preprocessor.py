@@ -6,7 +6,7 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
 # Configuration
-SOURCE_DIR = "/Users/nickgertonson/Desktop/FakeSD"
+SOURCE_DIR = "/Users/nickgertonson/Library/Mobile Documents/com~apple~CloudDocs/Video Backups/_FakeSD"
 BACKUP_DIR = "/Users/nickgertonson/Library/Mobile Documents/com~apple~CloudDocs/Video Backups"
 COMPILE_DIR = os.path.join(BACKUP_DIR, "Compilations")
 PROCESSED_FILES = os.path.join(BACKUP_DIR, ".processed_files.txt")
