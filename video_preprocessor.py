@@ -1,4 +1,5 @@
 import os
+import json
 import shutil
 import subprocess
 from datetime import datetime
@@ -22,13 +23,59 @@ def initialize_directories(project_name):
     os.makedirs(tmp_dir, exist_ok=True)
     return backup_subdir, tmp_dir
 
+def get_real_creation_time(video_path):
+    """
+    Use ffprobe to fetch the original creation_time from video metadata.
+    If not found, fall back to the file's OS ctime.
+    Returns a float representing the UNIX timestamp (seconds since epoch).
+    """
+    command = [
+        "ffprobe", 
+        "-v", "quiet",
+        "-print_format", "json",
+        "-show_format",
+        "-show_streams",
+        video_path
+    ]
+    
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, check=True)
+        data = json.loads(result.stdout)
+        
+        # Attempt to find creation_time in format tags
+        creation_str = None
+        
+        if "format" in data and "tags" in data["format"]:
+            creation_str = data["format"]["tags"].get("creation_time")
+        
+        # If not in format, attempt to find in streams
+        if not creation_str and "streams" in data:
+            for stream in data["streams"]:
+                if "tags" in stream and "creation_time" in stream["tags"]:
+                    creation_str = stream["tags"]["creation_time"]
+                    break
+        
+        if creation_str:
+            # Attempt to parse the creation_time string as an ISO8601 date
+            # e.g. "2022-07-19T14:30:00.000000Z"
+            dt = datetime.fromisoformat(creation_str.replace("Z", "+00:00"))
+            return dt.timestamp()
+        else:
+            # Fallback: use file system ctime if no metadata creation_time found
+            return os.path.getctime(video_path)
+    
+    except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
+        # On any error, also fallback
+        print(f"ffprobe failed for {video_path} - {e}, falling back to os.path.getctime().")
+        return os.path.getctime(video_path)
+
 def copy_files(source_dir, backup_subdir):
     processed_files = set()
     if os.path.exists(PROCESSED_FILES):
         with open(PROCESSED_FILES, 'r') as pf:
             processed_files = set(pf.read().splitlines())
     
-    file_data = []  # List of tuples: (dest_path, source_creation_time)
+    file_data = []  # List of tuples: (dest_path, real_creation_time)
     processed_srcs = []
 
     for root, _, files in os.walk(source_dir):
@@ -36,8 +83,8 @@ def copy_files(source_dir, backup_subdir):
             if file.lower().endswith(".mp4"):
                 src = os.path.join(root, file)
                 if src not in processed_files:
-                    # Get original creation time BEFORE copying
-                    creation_time = os.path.getctime(src)
+                    # Get real creation time via ffprobe BEFORE copying
+                    creation_time = get_real_creation_time(src)
                     
                     dest_dir = os.path.join(backup_subdir, os.path.relpath(root, source_dir))
                     os.makedirs(dest_dir, exist_ok=True)
@@ -47,11 +94,12 @@ def copy_files(source_dir, backup_subdir):
                     file_data.append((dest, creation_time))
                     processed_srcs.append(src)
 
+    # Update .processed_files.txt
     if processed_srcs:
         with open(PROCESSED_FILES, 'a') as pf:
             pf.write('\n'.join(processed_srcs) + '\n')
 
-    return file_data  # Return list of (dest_path, original_creation_time)
+    return file_data  # Return list of (dest_path, real_creation_time)
 
 def preprocess_video(input_file, tmp_dir):
     output_file = os.path.join(tmp_dir, f"pre_{Path(input_file).name}")
@@ -75,21 +123,20 @@ def preprocess_video(input_file, tmp_dir):
         return None
 
 def create_file_list(tmp_dir, file_data):
-    """Create file list sorted by ORIGINAL creation times"""
+    """Create file list sorted by the real creation times."""
     file_list_path = os.path.join(tmp_dir, "file_list.txt")
     
-    # Map preprocessed files to original creation times
+    # Map preprocessed files to real creation times
     processed_files = []
     for dest_path, creation_time in file_data:
         preprocessed = os.path.join(tmp_dir, f"pre_{Path(dest_path).name}")
         if os.path.exists(preprocessed):
             processed_files.append((preprocessed, creation_time))
     
-    # Sort by original creation time
+    # Sort by our real creation time
     processed_files.sort(key=lambda x: x[1])
     
-    # Debug output
-    print("\nSorted files by ORIGINAL creation time:")
+    print("\nSorted files by real creation time (from metadata if available):")
     for path, time in processed_files:
         print(f"{Path(path).name} - {datetime.fromtimestamp(time)}")
     
