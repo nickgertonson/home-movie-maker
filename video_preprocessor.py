@@ -23,59 +23,61 @@ def initialize_directories(project_name):
     os.makedirs(tmp_dir, exist_ok=True)
     return backup_subdir, tmp_dir
 
-def get_real_creation_time(video_path):
+def get_real_creation_time(file_path):
     """
-    Use ffprobe to fetch the original creation_time from video metadata.
-    If not found, fall back to the file's OS ctime.
-    Returns a float representing the UNIX timestamp (seconds since epoch).
+    Use ffprobe to get the creation_time from the file's metadata.
+    If not found, fall back to os.path.getctime.
+    Returns a datetime object.
     """
-    command = [
-        "ffprobe", 
-        "-v", "quiet",
-        "-print_format", "json",
-        "-show_format",
-        "-show_streams",
-        video_path
-    ]
-    
     try:
-        result = subprocess.run(command, capture_output=True, text=True, check=True)
+        cmd = [
+            "ffprobe", "-v", "quiet",
+            "-print_format", "json",
+            "-show_format", "-show_streams",
+            file_path
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
         data = json.loads(result.stdout)
-        
-        # Attempt to find creation_time in format tags
+
+        # Try to find creation_time in streams or format tags
         creation_str = None
-        
-        if "format" in data and "tags" in data["format"]:
-            creation_str = data["format"]["tags"].get("creation_time")
-        
-        # If not in format, attempt to find in streams
-        if not creation_str and "streams" in data:
-            for stream in data["streams"]:
-                if "tags" in stream and "creation_time" in stream["tags"]:
-                    creation_str = stream["tags"]["creation_time"]
+
+        # 1) Check 'streams' array
+        if 'streams' in data:
+            for stream in data['streams']:
+                if 'tags' in stream and 'creation_time' in stream['tags']:
+                    creation_str = stream['tags']['creation_time']
                     break
-        
+
+        # 2) If still None, check 'format' section
+        if not creation_str and 'format' in data and 'tags' in data['format']:
+            if 'creation_time' in data['format']['tags']:
+                creation_str = data['format']['tags']['creation_time']
+
         if creation_str:
-            # Attempt to parse the creation_time string as an ISO8601 date
-            # e.g. "2022-07-19T14:30:00.000000Z"
-            dt = datetime.fromisoformat(creation_str.replace("Z", "+00:00"))
-            return dt.timestamp()
+            # creation_str is typically ISO8601, e.g. "2025-01-28T12:34:56.000000Z"
+            # Strip the trailing 'Z' and parse as UTC if needed
+            return datetime.fromisoformat(creation_str.replace('Z','+00:00'))
         else:
-            # Fallback: use file system ctime if no metadata creation_time found
-            return os.path.getctime(video_path)
-    
-    except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
-        # On any error, also fallback
-        print(f"ffprobe failed for {video_path} - {e}, falling back to os.path.getctime().")
-        return os.path.getctime(video_path)
+            # Fallback: filesystem ctime
+            return datetime.fromtimestamp(os.path.getctime(file_path))
+
+    except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError, ValueError):
+        # If ffprobe fails or the JSON is malformed, fallback to filesystem ctime
+        return datetime.fromtimestamp(os.path.getctime(file_path))
 
 def copy_files(source_dir, backup_subdir):
+    """
+    Copies new .mp4 files from the source_dir to the backup_subdir,
+    capturing their real creation time (via ffprobe).
+    Returns a list of (dest_path, creation_dt).
+    """
     processed_files = set()
     if os.path.exists(PROCESSED_FILES):
         with open(PROCESSED_FILES, 'r') as pf:
             processed_files = set(pf.read().splitlines())
     
-    file_data = []  # List of tuples: (dest_path, real_creation_time)
+    file_data = []
     processed_srcs = []
 
     for root, _, files in os.walk(source_dir):
@@ -83,75 +85,114 @@ def copy_files(source_dir, backup_subdir):
             if file.lower().endswith(".mp4"):
                 src = os.path.join(root, file)
                 if src not in processed_files:
-                    # Get real creation time via ffprobe BEFORE copying
-                    creation_time = get_real_creation_time(src)
-                    
                     dest_dir = os.path.join(backup_subdir, os.path.relpath(root, source_dir))
                     os.makedirs(dest_dir, exist_ok=True)
                     dest = os.path.join(dest_dir, file)
+
+                    # Copy the file
                     shutil.copy2(src, dest)
+
+                    # Get the real creation datetime
+                    creation_dt = get_real_creation_time(src)
                     
-                    file_data.append((dest, creation_time))
+                    file_data.append((dest, creation_dt))
                     processed_srcs.append(src)
 
-    # Update .processed_files.txt
+    # Mark these files as processed so we don't copy them again
     if processed_srcs:
         with open(PROCESSED_FILES, 'a') as pf:
             pf.write('\n'.join(processed_srcs) + '\n')
 
-    return file_data  # Return list of (dest_path, real_creation_time)
+    return file_data  # [(dest_path, datetime), ...]
 
-def preprocess_video(input_file, tmp_dir):
+def escape_drawtext_text(text):
+    """
+    Escape special characters that confuse the drawtext filter:
+      - backslash
+      - single quote
+      - colon
+    """
+    # First escape backslashes, then single quotes, then colons
+    text = text.replace('\\', '\\\\')   # \ -> \\
+    text = text.replace("'", "\\'")     # ' -> \'
+    text = text.replace(':', '\\:')     # : -> \:
+    return text
+
+def preprocess_video(item, tmp_dir):
+    """
+    Overlays the date/time onto each video using drawtext.
+    """
+    input_file, creation_dt = item
     output_file = os.path.join(tmp_dir, f"pre_{Path(input_file).name}")
-    static_text = "sample text"
+
+    # Convert datetime to a more readable string, e.g. "2025-01-28 12:34:56"
+    dt_str = creation_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+    # Build the text we want to display
+    text_to_display = f"Recorded: {dt_str}"
+
+    # Escape for drawtext
+    escaped_text = escape_drawtext_text(text_to_display)
+
+    # Build our -vf filter string carefully
+    drawtext_filter = (
+        f"drawtext=fontfile=/System/Library/Fonts/Supplemental/Arial.ttf:"
+        f"text='{escaped_text}':"
+        "x=100:y=100:"
+        "fontcolor=white:fontsize=24:"
+        "box=1:boxcolor=black@0.5"
+    )
 
     command = [
         "ffmpeg", "-y",
         "-i", input_file,
-        "-vf", f"drawtext=fontfile=/System/Library/Fonts/Supplemental/Arial.ttf:text='{static_text}':x=100:y=100:fontcolor=white:fontsize=24:box=1:boxcolor=black@0.5",
+        "-vf", drawtext_filter,
         "-c:v", "libx264", "-crf", "23", "-preset", "fast",
-        "-c:a", "aac", output_file
+        "-c:a", "aac",
+        output_file
     ]
 
-    print(f"Processing: {input_file}")
+    print(f"Preprocessing: {input_file}")
     try:
-        process = subprocess.run(command, check=True, capture_output=True, text=True)
+        subprocess.run(command, check=True, capture_output=True, text=True)
         print(f"Success: {output_file} created.")
         return output_file
     except subprocess.CalledProcessError as e:
-        print(f"Error processing {input_file}:\n{e.stderr}")
+        print(f"Error preprocessing {input_file}:\n{e.stderr}")
         return None
 
 def create_file_list(tmp_dir, file_data):
-    """Create file list sorted by the real creation times."""
+    """
+    Create a file_list.txt sorted by the real creation datetime.
+    Only include files that successfully preprocessed.
+    """
     file_list_path = os.path.join(tmp_dir, "file_list.txt")
-    
-    # Map preprocessed files to real creation times
+
+    # Build a list of (preprocessed_path, creation_dt)
     processed_files = []
-    for dest_path, creation_time in file_data:
-        preprocessed = os.path.join(tmp_dir, f"pre_{Path(dest_path).name}")
-        if os.path.exists(preprocessed):
-            processed_files.append((preprocessed, creation_time))
-    
-    # Sort by our real creation time
+    for dest_path, creation_dt in file_data:
+        pre_file = os.path.join(tmp_dir, f"pre_{Path(dest_path).name}")
+        if os.path.exists(pre_file):
+            processed_files.append((pre_file, creation_dt))
+
+    # Sort by creation_dt
     processed_files.sort(key=lambda x: x[1])
-    
-    print("\nSorted files by real creation time (from metadata if available):")
-    for path, time in processed_files:
-        print(f"{Path(path).name} - {datetime.fromtimestamp(time)}")
-    
-    # Write to file list
+
+    print("\nFinal order of preprocessed files by creation time:")
+    for path, dt in processed_files:
+        print(f"{Path(path).name} - {dt}")
+
+    # Write to file_list.txt
     with open(file_list_path, 'w') as f:
         for video, _ in processed_files:
             f.write(f"file '{video}'\n")
-            
     return file_list_path
 
 def concatenate_videos(file_list_path, output_file):
     command = [
         "ffmpeg", "-f", "concat", "-safe", "0",
         "-i", file_list_path,
-        "-c", "copy",  # Use stream copy for faster concatenation
+        "-c", "copy",  # Stream copy for faster concatenation
         output_file
     ]
     try:
@@ -172,26 +213,26 @@ def main():
         return
 
     print("\nPreprocessing videos...")
-    input_files = [dest for dest, _ in file_data]
-    
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        results = list(executor.map(lambda f: preprocess_video(f, tmp_dir), input_files))
-    
-    preprocessed_files = [f for f in results if f]
+        results = list(executor.map(lambda item: preprocess_video(item, tmp_dir), file_data))
+
+    preprocessed_files = [r for r in results if r]
     if not preprocessed_files:
         print("No files preprocessed successfully.")
         return
 
-    print("\nCreating file list...")
+    print("\nCreating file list in chronological order...")
     file_list = create_file_list(tmp_dir, file_data)
     
     print("\nConcatenating videos...")
     output_file = os.path.join(COMPILE_DIR, f"{project_name}.mp4")
     concatenate_videos(file_list, output_file)
 
-    print("\nCleaning up...")
+    print("\nCleaning up temporary files...")
     shutil.rmtree(tmp_dir)
-    print(f"Total processing time: {datetime.now() - start_time}")
+
+    elapsed = datetime.now() - start_time
+    print(f"Total processing time: {elapsed}")
 
 if __name__ == "__main__":
     main()
