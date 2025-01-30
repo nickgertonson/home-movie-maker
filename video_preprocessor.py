@@ -121,33 +121,38 @@ def escape_drawtext_text(text):
 def preprocess_video(item, tmp_dir):
     """
     Overlays the date/time onto each video using drawtext.
+    Using SF Bold font (via direct path), bottom-right position,
+    fades out after 5 seconds.
     """
     input_file, creation_dt = item
     output_file = os.path.join(tmp_dir, f"pre_{Path(input_file).name}")
 
-    # Convert datetime to a more readable string, e.g. "2025-01-28 12:34:56"
-    dt_str = creation_dt.strftime("%Y-%m-%d %H:%M:%S")
+    # Example date/time format: "12/25/2025  4:18pm"
+    dt_base = creation_dt.strftime("%-m/%-d/%Y  %-I:%M")
+    am_pm = creation_dt.strftime("%p").lower()  # "am" or "pm"
+    dt_str = f"{dt_base}{am_pm}"                # e.g. "12/25/2025  4:18pm"
 
-    # Build the text we want to display
-    text_to_display = f"Recorded: {dt_str}"
+    # Escape text for drawtext
+    text_to_display = escape_drawtext_text(dt_str)
 
-    # Escape for drawtext
-    escaped_text = escape_drawtext_text(text_to_display)
+    # Fade out from 5s to 6s
+    alpha_expr = "if(lt(t,5),1, if(lt(t,6), 1-(t-5), 0))"
 
-    # Build our -vf filter string carefully
+    # <-- Replace this path with the actual SF Bold font file on your macOS
     drawtext_filter = (
-        f"drawtext=fontfile=/System/Library/Fonts/Supplemental/Arial.ttf:"
-        f"text='{escaped_text}':"
-        "x=100:y=100:"
-        "fontcolor=white:fontsize=24:"
-        "box=1:boxcolor=black@0.5"
+        "drawtext=fontfile=/System/Library/Fonts/SFCompact.ttf:"
+        f"text='{text_to_display}':"
+        "x='(w-text_w)-50':y='(h-text_h)-50':"
+        "fontsize=72:fontcolor=white:"
+        f"alpha='{alpha_expr}'"
     )
 
     command = [
         "ffmpeg", "-y",
         "-i", input_file,
         "-vf", drawtext_filter,
-        "-c:v", "libx264", "-crf", "23", "-preset", "fast",
+        "-c:v", "h264_videotoolbox",  # or libx264, if you prefer
+        "-b:v", "65000k",             # or '-crf 23 -preset fast'
         "-c:a", "aac",
         output_file
     ]
@@ -160,6 +165,7 @@ def preprocess_video(item, tmp_dir):
     except subprocess.CalledProcessError as e:
         print(f"Error preprocessing {input_file}:\n{e.stderr}")
         return None
+
 
 def create_file_list(tmp_dir, file_data):
     """
