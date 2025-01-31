@@ -1,32 +1,65 @@
 import os
-import json
 import shutil
 import subprocess
+import json
 from datetime import datetime
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
-# Configuration
+# ------------------- CONFIGURATION -------------------
 SOURCE_DIR = "/Users/nickgertonson/Library/Mobile Documents/com~apple~CloudDocs/Video Backups/_FakeSD"
 BACKUP_DIR = "/Users/nickgertonson/Library/Mobile Documents/com~apple~CloudDocs/Video Backups"
 COMPILE_DIR = os.path.join(BACKUP_DIR, "Compilations")
 PROCESSED_FILES = os.path.join(BACKUP_DIR, ".processed_files.txt")
 MAX_WORKERS = 4
 
+# ------------------- USER PROMPTS -------------------
+
 def prompt_for_project_name():
-    return input("Enter project name (e.g., November 2024): ").strip()
+    return input("Enter project name (e.g., December 2025): ").strip()
+
+def prompt_for_framerate():
+    """
+    Asks user to choose from three options:
+     1) 29.97
+     2) 59.94
+     3) Custom frame rate
+    Returns a string like "29.97" or the user-entered rate.
+    """
+    print("\nChoose a final frame rate:")
+    print("1) 29.97 fps")
+    print("2) 59.94 fps")
+    print("3) Enter your own (e.g., 30, 60, 23.976, etc.)")
+    choice = input("Enter your choice (1/2/3): ").strip()
+
+    if choice == "1":
+        return "29.97"
+    elif choice == "2":
+        return "59.94"
+    elif choice == "3":
+        custom = input("Enter custom frame rate (e.g., 30, 60, 23.976): ").strip()
+        return custom if custom else "29.97"  # fallback if user leaves blank
+    else:
+        print("Invalid choice, defaulting to 29.97 fps.")
+        return "29.97"
+
+# ------------------- HELPER FUNCTIONS -------------------
 
 def initialize_directories(project_name):
     backup_subdir = os.path.join(BACKUP_DIR, project_name)
     tmp_dir = os.path.join(backup_subdir, "tmp")
+
+    # Ensure the compilation directory exists
     os.makedirs(COMPILE_DIR, exist_ok=True)
+    # Ensure the project subdir & tmp subdir exist
     os.makedirs(tmp_dir, exist_ok=True)
+
     return backup_subdir, tmp_dir
 
 def get_real_creation_time(file_path):
     """
     Use ffprobe to get the creation_time from the file's metadata.
-    If not found, fall back to os.path.getctime.
+    If not found, fall back to os.path.getctime().
     Returns a datetime object.
     """
     try:
@@ -39,36 +72,32 @@ def get_real_creation_time(file_path):
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
         data = json.loads(result.stdout)
 
-        # Try to find creation_time in streams or format tags
         creation_str = None
 
-        # 1) Check 'streams' array
+        # Check streams
         if 'streams' in data:
             for stream in data['streams']:
                 if 'tags' in stream and 'creation_time' in stream['tags']:
                     creation_str = stream['tags']['creation_time']
                     break
 
-        # 2) If still None, check 'format' section
+        # If still None, check format tags
         if not creation_str and 'format' in data and 'tags' in data['format']:
             if 'creation_time' in data['format']['tags']:
                 creation_str = data['format']['tags']['creation_time']
 
         if creation_str:
-            # creation_str is typically ISO8601, e.g. "2025-01-28T12:34:56.000000Z"
-            # Strip the trailing 'Z' and parse as UTC if needed
+            # Typically an ISO8601 string like "2025-01-28T12:34:56.000000Z"
             return datetime.fromisoformat(creation_str.replace('Z','+00:00'))
         else:
-            # Fallback: filesystem ctime
             return datetime.fromtimestamp(os.path.getctime(file_path))
 
     except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError, ValueError):
-        # If ffprobe fails or the JSON is malformed, fallback to filesystem ctime
         return datetime.fromtimestamp(os.path.getctime(file_path))
 
 def copy_files(source_dir, backup_subdir):
     """
-    Copies new .mp4 files from the source_dir to the backup_subdir,
+    Copies new .mp4 files from source_dir to backup_subdir,
     capturing their real creation time (via ffprobe).
     Returns a list of (dest_path, creation_dt).
     """
@@ -89,16 +118,13 @@ def copy_files(source_dir, backup_subdir):
                     os.makedirs(dest_dir, exist_ok=True)
                     dest = os.path.join(dest_dir, file)
 
-                    # Copy the file
                     shutil.copy2(src, dest)
 
-                    # Get the real creation datetime
                     creation_dt = get_real_creation_time(src)
-                    
                     file_data.append((dest, creation_dt))
                     processed_srcs.append(src)
 
-    # Mark these files as processed so we don't copy them again
+    # Update .processed_files so we don't copy these again
     if processed_srcs:
         with open(PROCESSED_FILES, 'a') as pf:
             pf.write('\n'.join(processed_srcs) + '\n')
@@ -107,12 +133,8 @@ def copy_files(source_dir, backup_subdir):
 
 def escape_drawtext_text(text):
     """
-    Escape special characters that confuse the drawtext filter:
-      - backslash
-      - single quote
-      - colon
+    Escapes characters that can break ffmpeg's drawtext filter.
     """
-    # First escape backslashes, then single quotes, then colons
     text = text.replace('\\', '\\\\')   # \ -> \\
     text = text.replace("'", "\\'")     # ' -> \'
     text = text.replace(':', '\\:')     # : -> \:
@@ -120,27 +142,24 @@ def escape_drawtext_text(text):
 
 def preprocess_video(item, tmp_dir):
     """
-    Overlays the date/time onto each video using drawtext.
-    Using SF Bold font (via direct path), bottom-right position,
-    fades out after 5 seconds.
+    Overlays the date/time onto each video using drawtext (with a fade-out).
     """
     input_file, creation_dt = item
     output_file = os.path.join(tmp_dir, f"pre_{Path(input_file).name}")
 
-    # Example date/time format: "12/25/2025  4:18pm"
+    # Example: "12/25/2025  4:18pm"
     dt_base = creation_dt.strftime("%-m/%-d/%Y  %-I:%M")
-    am_pm = creation_dt.strftime("%p").lower()  # "am" or "pm"
-    dt_str = f"{dt_base}{am_pm}"                # e.g. "12/25/2025  4:18pm"
+    am_pm = creation_dt.strftime("%p").lower()  # "am"/"pm"
+    dt_str = f"{dt_base}{am_pm}"
 
-    # Escape text for drawtext
     text_to_display = escape_drawtext_text(dt_str)
 
     # Fade out from 5s to 6s
     alpha_expr = "if(lt(t,5),1, if(lt(t,6), 1-(t-5), 0))"
 
-    # <-- Replace this path with the actual SF Bold font file on your macOS
+    # Adjust font path if necessary for Arial Bold on your system
     drawtext_filter = (
-        "drawtext=fontfile=/System/Library/Fonts/SFCompact.ttf:"
+        "drawtext=fontfile=/System/Library/Fonts/Supplemental/Arial\\ Bold.ttf:"
         f"text='{text_to_display}':"
         "x='(w-text_w)-50':y='(h-text_h)-50':"
         "fontsize=72:fontcolor=white:"
@@ -151,8 +170,7 @@ def preprocess_video(item, tmp_dir):
         "ffmpeg", "-y",
         "-i", input_file,
         "-vf", drawtext_filter,
-        "-c:v", "h264_videotoolbox",  # or libx264, if you prefer
-        "-b:v", "65000k",             # or '-crf 23 -preset fast'
+        "-c:v", "libx264", "-crf", "23", "-preset", "fast",
         "-c:a", "aac",
         output_file
     ]
@@ -166,15 +184,13 @@ def preprocess_video(item, tmp_dir):
         print(f"Error preprocessing {input_file}:\n{e.stderr}")
         return None
 
-
 def create_file_list(tmp_dir, file_data):
     """
-    Create a file_list.txt sorted by the real creation datetime.
-    Only include files that successfully preprocessed.
+    Creates file_list.txt sorted by real creation datetime.
+    Only includes files that were successfully preprocessed.
     """
     file_list_path = os.path.join(tmp_dir, "file_list.txt")
 
-    # Build a list of (preprocessed_path, creation_dt)
     processed_files = []
     for dest_path, creation_dt in file_data:
         pre_file = os.path.join(tmp_dir, f"pre_{Path(dest_path).name}")
@@ -188,17 +204,26 @@ def create_file_list(tmp_dir, file_data):
     for path, dt in processed_files:
         print(f"{Path(path).name} - {dt}")
 
-    # Write to file_list.txt
+    # Write out the concat list
     with open(file_list_path, 'w') as f:
         for video, _ in processed_files:
             f.write(f"file '{video}'\n")
+
     return file_list_path
 
-def concatenate_videos(file_list_path, output_file):
+def concatenate_videos(file_list_path, output_file, chosen_framerate):
+    """
+    Concatenate all preprocessed videos by re-encoding,
+    applying the user-chosen frame rate at constant intervals (cfr).
+    """
     command = [
         "ffmpeg", "-f", "concat", "-safe", "0",
         "-i", file_list_path,
-        "-c", "copy",  # Stream copy for faster concatenation
+        "-c:v", "libx264", "-crf", "23", "-preset", "fast",
+        "-c:a", "aac",
+        # Force user-chosen fps at constant frame intervals
+        "-r", chosen_framerate,
+        "-fps_mode", "cfr",
         output_file
     ]
     try:
@@ -207,9 +232,13 @@ def concatenate_videos(file_list_path, output_file):
     except subprocess.CalledProcessError as e:
         print(f"Concatenation failed:\n{e.stderr}")
 
+# ------------------- MAIN SCRIPT -------------------
+
 def main():
     start_time = datetime.now()
     project_name = prompt_for_project_name()
+    chosen_framerate = prompt_for_framerate()
+
     backup_subdir, tmp_dir = initialize_directories(project_name)
 
     print("Copying files...")
@@ -229,10 +258,10 @@ def main():
 
     print("\nCreating file list in chronological order...")
     file_list = create_file_list(tmp_dir, file_data)
-    
-    print("\nConcatenating videos...")
+
+    print("\nConcatenating videos (re-encoding)...")
     output_file = os.path.join(COMPILE_DIR, f"{project_name}.mp4")
-    concatenate_videos(file_list, output_file)
+    concatenate_videos(file_list, output_file, chosen_framerate)
 
     print("\nCleaning up temporary files...")
     shutil.rmtree(tmp_dir)
