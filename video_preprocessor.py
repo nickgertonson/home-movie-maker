@@ -142,7 +142,8 @@ def escape_drawtext_text(text):
 
 def preprocess_video(item, tmp_dir):
     """
-    Overlays the date/time onto each video using drawtext (with a fade-out).
+    Overlays the date/time onto each video using drawtext (with a fade-out),
+    then encodes with h264_videotoolbox for GPU-accelerated processing.
     """
     input_file, creation_dt = item
     output_file = os.path.join(tmp_dir, f"pre_{Path(input_file).name}")
@@ -157,7 +158,7 @@ def preprocess_video(item, tmp_dir):
     # Fade out from 5s to 6s
     alpha_expr = "if(lt(t,5),1, if(lt(t,6), 1-(t-5), 0))"
 
-    # Adjust font path if necessary for Arial Bold on your system
+    # Use Arial Bold (adjust font path if needed)
     drawtext_filter = (
         "drawtext=fontfile=/System/Library/Fonts/Supplemental/Arial\\ Bold.ttf:"
         f"text='{text_to_display}':"
@@ -166,16 +167,19 @@ def preprocess_video(item, tmp_dir):
         f"alpha='{alpha_expr}'"
     )
 
+    # Switch from libx264 to hardware-accelerated "h264_videotoolbox"
+    # You'll want to specify a target bitrate (e.g. 10 Mbps) for 4K. Adjust as needed:
     command = [
         "ffmpeg", "-y",
         "-i", input_file,
         "-vf", drawtext_filter,
-        "-c:v", "libx264", "-crf", "23", "-preset", "fast",
+        "-c:v", "h264_videotoolbox",
+        "-b:v", "10000k",  # Example ~10 Mbps. Increase if you need higher quality for 4K
         "-c:a", "aac",
         output_file
     ]
 
-    print(f"Preprocessing: {input_file}")
+    print(f"Preprocessing (GPU-accelerated): {input_file}")
     try:
         subprocess.run(command, check=True, capture_output=True, text=True)
         print(f"Success: {output_file} created.")
