@@ -173,7 +173,7 @@ def prompt_for_normalization(unique_specs):
 
 # ------------------- PREPROCESS (COMBINE NORMALIZE + DRAWTEXT) -------------------
 
-def normalize_and_overlay(item, tmp_dir, target_specs=None, encoder="h264_videotoolbox", bitrate="60000k"):
+def normalize_and_overlay(item, tmp_dir, target_specs=None, encoder="h264_videotoolbox", bitrate="60000k", target_hw_fps=None):
     input_file, creation_dt = item
     output_file = os.path.join(tmp_dir, f"pre_{Path(input_file).name}")
     total_duration = get_video_duration(input_file)
@@ -212,12 +212,15 @@ def normalize_and_overlay(item, tmp_dir, target_specs=None, encoder="h264_videot
         video_filter = drawtext_filter
         fps_value = original_fps_str
 
-    # Use -progress pipe:1 to have ffmpeg report progress
+    # If using hardware encoding and target_hw_fps is provided, override fps_value.
+    if encoder == "h264_videotoolbox" and target_hw_fps is not None:
+        fps_value = str(target_hw_fps)
+
     command = [
         "ffmpeg", "-y",
         "-i", input_file,
         "-vf", video_filter,
-        "-r", fps_value,
+        "-r", fps_value,          # Force the output frame rate using fps_value
         "-fps_mode", "cfr",
         "-vsync", "cfr",
         "-c:v", encoder,
@@ -228,7 +231,6 @@ def normalize_and_overlay(item, tmp_dir, target_specs=None, encoder="h264_videot
     ]
 
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    # Read ffmpeg progress and update the global progress_dict for this file
     while True:
         line = process.stdout.readline()
         if not line:
@@ -288,7 +290,8 @@ def concatenate_videos(file_list_path, output_file):
 # ------------------- OVERALL PROGRESS UPDATER -------------------
 
 def overall_progress_updater(total_all):
-    overall_pbar = tqdm(total=total_all, desc="Overall Progress", unit="s")
+    overall_pbar = tqdm(total=total_all, desc="Overall Progress", unit="s",
+                          bar_format="{l_bar}{bar}| {n:.0f}s/{total:.0f}s [{elapsed}<{remaining}, {rate_fmt}]")
     while not all_done:
         with progress_lock:
             current = sum(progress_dict.get(k, 0) for k in progress_dict)
@@ -324,16 +327,25 @@ def main():
             if chosen:
                 target_spec = chosen
 
-    # Ask for encoder choice
+    # Encoder option:
     encoder_choice = input("Choose encoder: hardware (h) or software (s): ").strip().lower()
     if encoder_choice == "s":
         encoder = "libx264"
         bitrate = "60000k"
+        target_hw_fps = None
     else:
         encoder = "h264_videotoolbox"
         bitrate = "60000k"
+        target_hw_fps = input("Enter target FPS for hardware encoding (30 or 60): ").strip()
+        try:
+            target_hw_fps = int(target_hw_fps)
+            if target_hw_fps not in (30, 60):
+                tqdm.write("Invalid FPS, defaulting to 30fps.")
+                target_hw_fps = 30
+        except:
+            tqdm.write("Invalid input, defaulting to 30fps.")
+            target_hw_fps = 30
 
-    # Calculate total duration for overall progress bar
     total_all = 0.0
     for (dest, _) in file_data:
         dur = get_video_duration(dest)
@@ -345,7 +357,7 @@ def main():
     progress_thread.start()
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = [executor.submit(normalize_and_overlay, item, tmp_dir, target_spec, encoder, bitrate)
+        futures = [executor.submit(normalize_and_overlay, item, tmp_dir, target_spec, encoder, bitrate, target_hw_fps)
                    for item in file_data]
         results = []
         for future in as_completed(futures):
