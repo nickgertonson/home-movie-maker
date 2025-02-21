@@ -11,8 +11,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
 from tqdm import tqdm
 
 # -------------- Configuration --------------
-SOURCE_DIR = Path("/Users/nickgertonson/Library/Mobile Documents/com~apple~CloudDocs/Video Backups/_FakeSD")
-BACKUP_DIR = Path("/Users/nickgertonson/Library/Mobile Documents/com~apple~CloudDocs/Video Backups")
+SOURCE_DIR = Path("/Users/nickgertonson/Documents/Local Projects/Video Backups/_FakeSD")
+BACKUP_DIR = Path("/Users/nickgertonson/Documents/Local Projects/Video Backups")
 COMPILE_DIR = BACKUP_DIR / "Compilations"
 PROCESSED_FILES = BACKUP_DIR / ".processed_files.txt"
 MAX_WORKERS = 4
