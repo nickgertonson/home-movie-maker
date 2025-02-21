@@ -344,15 +344,17 @@ def main():
 
     encoder = "h264_videotoolbox"
     bitrate = "60000k"  
-    target_hw_fps = input("Enter target FPS for hardware encoding (30 or 60): ").strip()
-    try:
-        target_hw_fps = int(target_hw_fps)
-        if target_hw_fps not in (30, 60):
-            tqdm.write("Invalid FPS, defaulting to 30fps.")
+
+    # Determine target_hw_fps from the source content.
+    if target_spec:
+        target_hw_fps = int(round(target_spec[2]))
+    else:
+        info = get_stream_info(file_data[0][0])
+        if info and info[2]:
+            target_hw_fps = int(round(info[2]))
+        else:
+            tqdm.write("Could not detect FPS, defaulting to 30fps.")
             target_hw_fps = 30
-    except:
-        tqdm.write("Invalid input, defaulting to 30fps.")
-        target_hw_fps = 30  
 
     total_all = 0.0
     for (dest, _) in file_data:
