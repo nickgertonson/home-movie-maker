@@ -147,30 +147,13 @@ def prompt_for_normalization(unique_specs):
     for i, spec in enumerate(specs_list, 1):
         w, h, fps, _ = spec
         tqdm.write(f"{i}) {w}x{h} @ {fps:.2f} fps")
-    choice = input(f"\nPick one of the above (#1..{len(specs_list)}) or type 'c' for custom: ").strip()
+    choice = input(f"\nPick one of the above (#1..{len(specs_list)}): ").strip()
     if choice.isdigit():
         idx = int(choice) - 1
         if 0 <= idx < len(specs_list):
-            w, h, fps, fps_raw = specs_list[idx]
-            return (w, h, fps, fps_raw)
-    elif choice.lower() == 'c':
-        tw = input("Enter desired width (e.g. 1920): ").strip()
-        th = input("Enter desired height (e.g. 1080): ").strip()
-        tfps = input("Enter desired fps (e.g. 29.97 or 30000/1001): ").strip()
-        try:
-            w = int(tw)
-            h = int(th)
-            if '/' in tfps:
-                num, den = tfps.split('/')
-                fps_float = float(num) / float(den)
-            else:
-                fps_float = float(tfps)
-            return (w, h, fps_float, tfps)
-        except:
-            tqdm.write("Invalid input. Using 1920x1080@29.97 as fallback.")
-            return (1920, 1080, 29.97, "30000/1001")
-    return None
-
+            return specs_list[idx]
+    tqdm.write("Invalid input. Using default normalization (1920x1080@29.97).")
+    return (1920, 1080, 29.97, "30000/1001")
 # ------------------- PREPROCESS (COMBINE NORMALIZE + DRAWTEXT) -------------------
 
 def normalize_and_overlay(item, tmp_dir, target_specs=None, encoder="h264_videotoolbox", bitrate="60000k", target_hw_fps=None):
@@ -333,14 +316,7 @@ def main():
         return
     all_paths = [t[0] for t in file_data]
     unique_specs, file_specs = inspect_clips_for_mismatch(all_paths)
-    target_spec = None
-    if len(unique_specs) > 1:
-        tqdm.write("\nWe detected multiple resolutions/frame rates among the new clips.")
-        resp = input("Do you want to unify them before overlay? (y/n): ").strip().lower()
-        if resp == 'y':
-            chosen = prompt_for_normalization(unique_specs)
-            if chosen:
-                target_spec = chosen
+    target_spec = prompt_for_normalization(unique_specs)
 
     encoder = "h264_videotoolbox"
     bitrate = "60000k"  
